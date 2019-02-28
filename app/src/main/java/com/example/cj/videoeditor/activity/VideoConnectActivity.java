@@ -1,192 +1,127 @@
 package com.example.cj.videoeditor.activity;
 
+import android.content.Intent;
 import android.media.MediaMetadataRetriever;
-import android.media.MediaPlayer;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Message;
 import android.support.annotation.Nullable;
-import android.util.Log;
+import android.support.v7.app.AppCompatActivity;
+import android.text.TextUtils;
 import android.view.View;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.example.cj.videoeditor.Constants;
 import com.example.cj.videoeditor.R;
-import com.example.cj.videoeditor.bean.AudioSettingInfo;
-import com.example.cj.videoeditor.bean.CutBean;
-import com.example.cj.videoeditor.gpufilter.SlideGpuFilterGroup;
-import com.example.cj.videoeditor.gpufilter.helper.MagicFilterType;
-import com.example.cj.videoeditor.media.MediaPlayerWrapper;
 import com.example.cj.videoeditor.media.VideoInfo;
 import com.example.cj.videoeditor.mediacodec.MediaMuxerRunnable;
-import com.example.cj.videoeditor.utils.TimeFormatUtils;
-import com.example.cj.videoeditor.widget.VideoPreviewView;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
- * Created by cj on 2018/1/2.
- * desc
+ * Created by cj on 2018/6/3.
+ * 视频拼接的类
  */
 
-public class VideoConnectActivity extends BaseActivity implements View.OnClickListener, MediaPlayerWrapper.IMediaCallback, SlideGpuFilterGroup.OnFilterChangeListener {
-    private VideoPreviewView mPreviewView;
-    List<String> inputPath;
-    ExecutorService pool;
-    AudioSettingInfo settingInfo;
+public class VideoConnectActivity extends BaseActivity implements View.OnClickListener {
+    private TextView mPathOne;
+    private TextView mPathTwo;
+    private String path1;
+    private String path2;
 
-    static final int ENCODE_START = 0;
-    static final int ENCODE_FINISH = 1;
-    static final int UPDATE_SEEKBAR = 2;
-    static final int VIDEO_PREPARE = 3;
-    static final int VIDEO_START = 4;
-    static final int VIDEO_PAUSE = 5;
-    static final int VIDEO_CHANGED = 6;
-    static final int VIDEO_COMPLETION = 7;
-
-    private String outputPath;
-
-    private MagicFilterType currentFilterType;
-
-    Handler mHandler = new Handler() {
-        @Override
-        public void handleMessage(Message msg) {
-            switch (msg.what) {
-                case ENCODE_START:
-                    break;
-                case ENCODE_FINISH:
-                    endLoading();
-                    Toast.makeText(VideoConnectActivity.this, "Finish Encode path=" + outputPath, Toast.LENGTH_SHORT).show();
-                    break;
-                case UPDATE_SEEKBAR:
-                    break;
-                case VIDEO_PREPARE:
-
-                    break;
-                case VIDEO_START:
-                    break;
-                case VIDEO_PAUSE:
-                    break;
-                case VIDEO_CHANGED:
-                    break;
-                case VIDEO_COMPLETION:
-                    break;
-            }
-        }
-    };
+    private ArrayList<VideoInfo> mInfoList = new ArrayList<>();
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_connect);
-        initView();
-        initData();
-    }
+        setContentView(R.layout.activity_video_connect);
+        findViewById(R.id.select_one).setOnClickListener(this);
+        findViewById(R.id.select_two).setOnClickListener(this);
+        findViewById(R.id.video_connect).setOnClickListener(this);
 
-    private void initData() {
-        inputPath = getIntent().getStringArrayListExtra("path");
-
-        mPreviewView.setVideoPath(inputPath);
-        mPreviewView.setIMediaCallback(this);
-        mPreviewView.setOnFilterChangeListener(this);
-        mPreviewView.clearWaterMark();//设置不显示水印
-
-        pool = Executors.newCachedThreadPool();
-        settingInfo = new AudioSettingInfo();
-        settingInfo.volFirst = 1;
-        settingInfo.volSecond = 1;
-    }
-
-    private void initView() {
-        mPreviewView = (VideoPreviewView) findViewById(R.id.connect_video_view);
-        findViewById(R.id.iv_back).setOnClickListener(this);
-        findViewById(R.id.iv_confirm).setOnClickListener(this);
-    }
-
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        mPreviewView.pause();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        mPreviewView.onDestroy();
+        mPathOne = (TextView) findViewById(R.id.path_one);
+        mPathTwo = (TextView) findViewById(R.id.path_two);
     }
 
     @Override
     public void onClick(View v) {
         switch (v.getId()) {
-            case R.id.iv_back:
-                finish();
+            case R.id.select_one:
+                VideoSelectActivity.openActivityForResult(this, 100);
                 break;
-            case R.id.iv_confirm:
-                mPreviewView.pause();
-                showLoading("视频编辑中");
+            case R.id.select_two:
+                VideoSelectActivity.openActivityForResult(this, 101);
+                break;
+            case R.id.video_connect:
+                if (TextUtils.isEmpty(path1) || TextUtils.isEmpty(path2)) {
+                    Toast.makeText(this, "请先选择视频", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String[] data = {path1, path2};
+                setDataSource(data);
 
-                pool.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        outputPath = Constants.getPath("output/", System.currentTimeMillis() + ".mp4");
-                        final long startTime = System.currentTimeMillis();
-                        MediaMuxerRunnable instance = new MediaMuxerRunnable();
-                        instance.setVideoInfo(mPreviewView.getVideoInfo(), outputPath);
-                        instance.setAudioSetting(settingInfo);
-                        instance.setFilterType(currentFilterType);
-                        instance.addMuxerListener(new MediaMuxerRunnable.MuxerListener() {
-                            @Override
-                            public void onStart() {
-                                Log.e("hero", "===muxer  onStart====");
-                            }
 
-                            @Override
-                            public void onFinish() {
-                                Log.e("hero", "===muxer  onFinish====");
-                                long endTime = System.currentTimeMillis();
-                                Log.e("timee", "---视频编辑消耗的时间===" + (endTime - startTime));
-                                mHandler.sendEmptyMessage(1);
-                            }
-                        });
-                        instance.start();
-                    }
-                });
                 break;
         }
     }
+    private String outputPath;
+    public void setDataSource(String[] dataSource) {
 
-    @Override
-    public void onVideoPrepare() {
+        MediaMetadataRetriever retr = new MediaMetadataRetriever();
+        mInfoList.clear();
+        for (int i = 0; i < dataSource.length; i++) {
+            VideoInfo info = new VideoInfo();
+            String path = dataSource[i];
+            retr.setDataSource(path);
+            String rotation = retr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
+            String width = retr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
+            String height = retr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+            String duration = retr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+
+            info.path = path;
+            info.rotation = Integer.parseInt(rotation);
+            info.width = Integer.parseInt(width);
+            info.height = Integer.parseInt(height);
+            info.duration = Integer.parseInt(duration);
+
+            mInfoList.add(info);
+        }
+        outputPath = Constants.getPath("video/output/", System.currentTimeMillis() + "");
+        showLoading("视频拼接中");
+        MediaMuxerRunnable instance = new MediaMuxerRunnable();
+        instance.setVideoInfo(mInfoList, outputPath);
+        instance.addMuxerListener(new MediaMuxerRunnable.MuxerListener() {
+            @Override
+            public void onStart() {
+
+            }
+
+            @Override
+            public void onFinish() {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        endLoading();
+                        Toast.makeText(VideoConnectActivity.this," 拼接完成 文件地址 "+outputPath,Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        });
+        instance.start();
 
     }
 
     @Override
-    public void onVideoStart() {
-
-    }
-
-    @Override
-    public void onVideoPause() {
-
-    }
-
-    @Override
-    public void onCompletion(MediaPlayer mp) {
-
-    }
-
-    @Override
-    public void onVideoChanged(VideoInfo info) {
-
-    }
-
-    @Override
-    public void onFilterChange(MagicFilterType type) {
-        currentFilterType = type;
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (data != null) {
+            if (requestCode == 100) {
+                path1 = data.getStringExtra("path");
+                mPathOne.setText(path1);
+            } else if (requestCode == 101) {
+                path2 = data.getStringExtra("path");
+                mPathTwo.setText(path2);
+            }
+        }
     }
 }

@@ -7,10 +7,8 @@ import android.media.MediaFormat;
 import android.os.Build;
 import android.util.Log;
 
-import com.example.cj.videoeditor.bean.MediaDecode;
-import com.example.cj.videoeditor.gpufilter.basefilter.GPUImageFilter;
-import com.example.cj.videoeditor.gpufilter.helper.MagicFilterFactory;
-import com.example.cj.videoeditor.gpufilter.helper.MagicFilterType;
+
+import com.example.cj.videoeditor.media.MediaCodecInfo;
 import com.example.cj.videoeditor.media.VideoInfo;
 
 import java.io.IOException;
@@ -29,25 +27,21 @@ public class VideoRunnable extends Thread {
     private static final int frameRate = 30;           //视频编码帧率
     private static final int frameInterval = 1;
     private MediaMuxerRunnable mMediaMuxer;
-    private String inputFile;
-    private boolean isExit = false;
-    public int videoWidth;
-    public int videoHeight;
-    GPUImageFilter filter;
+
+//    private GPUImageFilter filter;
 
     private MediaFormat videoOutputFormat;
-    private MediaExtractor mExtractor;
 
     //处理多段视频
     private List<VideoInfo> mVideoInfos;//多段视频的信息
     private List<MediaExtractor> mExtractors;
-    private List<MediaDecode> mMediaCodecInfos;
+    private List<MediaCodecInfo> mMediaCodecInfos;
     private VideoInfo mInfo;
 
-    public VideoRunnable(List<VideoInfo> inputFiles, MagicFilterType filterType, MediaMuxerRunnable mediaMuxer) {
+    public VideoRunnable(List<VideoInfo> inputFiles, MediaMuxerRunnable mediaMuxer) {
         this.mMediaMuxer = mediaMuxer;
         this.mVideoInfos = inputFiles;
-        this.filter = MagicFilterFactory.initFilters(filterType);
+//        this.filter = MagicFilterFactory.initFilters(filterType);
     }
 
     @Override
@@ -68,9 +62,7 @@ public class VideoRunnable extends Thread {
         videoEncoder.start();//编码器启动
 
         OutputSurface outputSurface = new OutputSurface(mInfo);
-        if (filter != null) {
-            outputSurface.addGpuFilter(filter);
-        }
+
         List<MediaCodec> decodeList = new ArrayList<>();
         List<MediaFormat> formatList = new ArrayList<>();
         try {
@@ -90,28 +82,23 @@ public class VideoRunnable extends Thread {
                 }
             }
 
-            editVideoDataNew(mMediaCodecInfos, decodeList, formatList, outputSurface, inputSurface, videoEncoder);
+            editVideoData(mMediaCodecInfos, decodeList, formatList, outputSurface, inputSurface, videoEncoder);
         } finally {
-            if (outputSurface != null) {
-                outputSurface.release();
-            }
-            if (inputSurface != null) {
-                inputSurface.release();
-            }
-            if (videoEncoder != null) {
-                videoEncoder.stop();
-                videoEncoder.release();
-            }
+
+            outputSurface.release();
+            inputSurface.release();
+            videoEncoder.stop();
+            videoEncoder.release();
         }
     }
 
     //重构分离数据 解码数据 编码数据的流程
-    private void editVideoDataNew(List<MediaDecode> mediaCodecInfos, List<MediaCodec> decodeList,
-                                  List<MediaFormat> formatList, OutputSurface outputSurface,
-                                  InputSurface inputSurface, MediaCodec videoEncoder) {
+    private void editVideoData(List<MediaCodecInfo> mediaCodecInfos, List<MediaCodec> decodeList,
+                               List<MediaFormat> formatList, OutputSurface outputSurface,
+                               InputSurface inputSurface, MediaCodec videoEncoder) {
         long start = System.currentTimeMillis();
         final int TIMEOUT_USEC = 0;
-        /**
+        /*
          * 1、初始化第一个解码器
          * */
         MediaCodec decoder = decodeList.get(0);
@@ -119,20 +106,20 @@ public class VideoRunnable extends Thread {
         decoder.start();
         ByteBuffer[] inputBuffers = decoder.getInputBuffers();
 
-        /**
+        /*
          * 2、初始化第一个分离器
          * */
-        MediaDecode mediaCodecInfo = mediaCodecInfos.get(0);
+        MediaCodecInfo mediaCodecInfo = mediaCodecInfos.get(0);
 
-        /** 3、初始化编码器*/
+        /* 3、初始化编码器*/
         ByteBuffer[] encoderOutputBuffers = videoEncoder.getOutputBuffers();
-        /**
+        /*
          * 4、初始化解码器和编码器的bufferInfo
          * */
         MediaCodec.BufferInfo encodeOutputInfo = new MediaCodec.BufferInfo();
         MediaCodec.BufferInfo decodeOutputInfo = new MediaCodec.BufferInfo();
 
-        /**
+        /*
          * 5、初始化while循环 while循环判断结束的标准在于 所有编码器中的数据 都已经添加到了分离器
          * */
         boolean outputDone = false;//是否整体编解码完毕
@@ -150,24 +137,25 @@ public class VideoRunnable extends Thread {
         long lastVideoTime = 0;
 
         while (!outputDone) {
-            /**
+            /*
              * 6、循环的第一步 从分离器中取数据 写入到解码器中
              * */
             if (!inputDone) {
                 int inputIndex = decoder.dequeueInputBuffer(TIMEOUT_USEC);
+                Log.e("videoo", "---解码器 是否可用  " + inputIndex);
                 if (inputIndex >= 0) {
-                    /**说明解码器有可用的ByteBuffer*/
+                    /*说明解码器有可用的ByteBuffer*/
                     ByteBuffer inputBuffer = inputBuffers[inputIndex];
                     inputBuffer.clear();
-                    /**从分离器中取数据*/
+                    /*从分离器中取数据*/
                     int readSampleData = mediaCodecInfo.extractor.readSampleData(inputBuffer, 0);
                     if (readSampleData < 0) {
-                        /**说明该分离器中 没有数据了 发送一个解码流结束的标志位*/
+                        /*说明该分离器中 没有数据了 发送一个解码流结束的标志位*/
                         Log.e("send", "-----发送end--flag");
                         inputDone = true;
                         decoder.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                     } else {
-                        /**
+                        /*
                          * 重写输入数据的时间戳
                          * 关键点在于 如果是下一段视频的数据
                          * 那么 + 30000
@@ -185,23 +173,24 @@ public class VideoRunnable extends Thread {
                             }
                         }
                         lastInputTime = mediaCodecInfo.extractor.getSampleTime();
-                        /**将分离器的数据 插入解码器中*/
+                        /*将分离器的数据 插入解码器中*/
                         decoder.queueInputBuffer(inputIndex, 0, readSampleData, decodeInputTimeStamp, 0);
                         mediaCodecInfo.extractor.advance();
                     }
                 }
             }
 
-            /**
+            /*
              * 7、循环的第二步，轮询取出解码器解码完成的数据 并且加入到编码器中
              * */
             boolean decodeOutputDone = false;
             boolean encodeDone = false;
             while (!decodeOutputDone || !encodeDone) {
-                /**说明解码器的输出output有数据*/
+                /*说明解码器的输出output有数据*/
                 int outputIndex = decoder.dequeueOutputBuffer(decodeOutputInfo, TIMEOUT_USEC);
+                Log.e("videoo", "  解码器出来的index   " + outputIndex);
                 if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    /**没有可用的解码器output*/
+                    /*没有可用的解码器output*/
                     decodeOutputDone = true;
                 } else if (outputIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
 
@@ -209,41 +198,35 @@ public class VideoRunnable extends Thread {
                     MediaFormat newFormat = decoder.getOutputFormat();
                 } else if (outputIndex < 0) {
                 } else {
-                    /**
+                    /*
                      * 8、判断本次是否有数据 以及本次数据是否需要传入编码器
                      * */
                     boolean doRender = (decodeOutputInfo.size != 0);
-                    /**
+                    /*
                      * 9、根据当前解码出来的数据的时间戳 判断 是否需要写入编码器
                      * */
                     boolean isUseful = true;
                     if (decodeOutputInfo.presentationTimeUs <= 0) {
                         doRender = false;
                     }
-                    Log.e("videoo", "---解码器解码出来的数据=+==" + decodeOutputInfo.presentationTimeUs + "----cutPoint==" + mediaCodecInfo.cutPoint + "--cutDuration==" + mediaCodecInfo.cutDuration);
-                    if (mediaCodecInfo.cutDuration > 0 && decodeOutputInfo.presentationTimeUs / 1000 < mediaCodecInfo.cutPoint) {
-                        /**还没有到剪切点，属于被放弃的数据*/
-                        isUseful = false;
-                        Log.e("videoo", "---被抛弃的数据==头==");
-                    }
-                    if (mediaCodecInfo.cutDuration > 0 && decodeOutputInfo.presentationTimeUs / 1000 > (mediaCodecInfo.cutPoint + mediaCodecInfo.cutDuration)) {
-                        /**当前数据已经超过了剪切点 属于多余的数据*/
-                        isUseful = false;
-                        Log.e("videoo", "---被抛弃的数据==尾==");
-                    }
+
                     decoder.releaseOutputBuffer(outputIndex, doRender && isUseful);
+
                     if (doRender && isUseful) {
-                        /**
+                        /*
                          * 是有效数据 让他写到编码器中
                          * 并且对时间戳 进行重写
                          * */
+                        Log.e("videoo", "---卡主了？ 一  " + decodeOutputInfo.size);
                         outputSurface.awaitNewImage();
+                        Log.e("videoo", "---卡住了  === 二");
                         outputSurface.drawImage();
+                        Log.e("videoo", "---卡住了  === 三！！！");
                         if (isFirstDecodeOutputFrame) {
-                            /**如果是第一个视频的话，有可能时间戳不是从0 开始的 所以需要初始化*/
+                            /*如果是第一个视频的话，有可能时间戳不是从0 开始的 所以需要初始化*/
                             isFirstDecodeOutputFrame = false;
                         } else {
-                            /**
+                            /*
                              * 如果是更换了一个视频源 就+30000us
                              */
                             if (isChangeVideo) {
@@ -257,19 +240,21 @@ public class VideoRunnable extends Thread {
                         Log.e("videooo", "---在编码画面帧的时候，重置时间戳===" + encodeInputTimeStamp);
                         inputSurface.setPresentationTime(encodeInputTimeStamp * 1000);
                         inputSurface.swapBuffers();
+
+                    } else {
+                        Log.e("videoo", "---解码出来的视频有问题=== " + doRender + "   " + isUseful);
                     }
                     lastVideoTime = decodeOutputInfo.presentationTimeUs;
-                    /**判断解码器是否解码完毕了*/
+
                     if ((decodeOutputInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                         /**
                          * 解码器解码完成了，说明该分离器的数据写入完成了 并且都已经解码完成了
                          * 更换分离器和解码器或者结束编解码
                          * */
                         curVideoIndex++;
-                        Log.e("send", "------收到了结束的标志位---当前是第几个video-"+curVideoIndex+"----videoList的size=="+mediaCodecInfos.size());
                         if (curVideoIndex < mediaCodecInfos.size()) {
-                            /**说明还有需要解码的*/
-                            /**
+                            /*说明还有需要解码的*/
+                            /*
                              * 1)、更换分离器
                              * 2）、更换解码器
                              * */
@@ -288,16 +273,14 @@ public class VideoRunnable extends Thread {
                             isNextStep = true;
                             Log.e("videoo", "---更换分离器 and 解码器---==");
                         } else {
-                            /**没有数据了 就给编码器发送一个结束的标志位*/
+                            /*没有数据了 就给编码器发送一个结束的标志位*/
                             videoEncoder.signalEndOfInputStream();
                             inputDone = true;
                             Log.e("videoo", "---所有视频都解码完成了 告诉编码器 可以结束了---==");
                         }
-                    }else {
-                        Log.e("send", "------没有完成 继续 go on");
                     }
                 }
-                /**
+                /*
                  * 10、从编码器中取数据 重写时间戳 添加到混合器中
                  *   如果发生了更换视频源 那么 就先把编码器的所有数据读取出来
                  *   然后再向解码器输入数据 以确保编码器时间戳的正确性
@@ -305,18 +288,18 @@ public class VideoRunnable extends Thread {
                 while (!encodeDone) {
                     int encodeOutputState = videoEncoder.dequeueOutputBuffer(encodeOutputInfo, TIMEOUT_USEC);
                     if (encodeOutputState == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                        /** 说明没有可用的编码器 */
+                        /* 说明没有可用的编码器 */
                         encodeDone = true;
                     } else if (encodeOutputState == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
                         encoderOutputBuffers = videoEncoder.getOutputBuffers();
                     } else if (encodeOutputState == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        /**初始化混合器的MediaFormat*/
+                        /*初始化混合器的MediaFormat*/
                         MediaFormat newFormat = videoEncoder.getOutputFormat();
-                        mMediaMuxer.addMeidaFormat(MediaMuxerRunnable.MEDIA_TRACK_VIDEO, newFormat);
+                        mMediaMuxer.addMediaFormat(MediaMuxerRunnable.MEDIA_TRACK_VIDEO, newFormat);
                         Log.e("videoo", "---添加MediaFormat");
                     } else if (encodeOutputState < 0) {
                     } else {
-                        /**判断编码器是否完成了编码*/
+                        /*判断编码器是否完成了编码*/
                         outputDone = (encodeOutputInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
                         if (outputDone) {
                             break;
@@ -342,29 +325,26 @@ public class VideoRunnable extends Thread {
         Log.e("timee", "---视频编码完成---视频编码耗时-==" + (end - start));
     }
 
+
     private void prepare() throws IOException {
         mExtractors = new ArrayList<>();
         mMediaCodecInfos = new ArrayList<>();
 
         //初始化所以的分离器
-        int videoDuration = 0;
         for (int i = 0; i < mVideoInfos.size(); i++) {
             MediaExtractor temp = new MediaExtractor();
             VideoInfo videoInfo = mVideoInfos.get(i);
             temp.setDataSource(videoInfo.path);
             mExtractors.add(temp);
             //多个视频剪切，根据视频所在位置 对本视频剪切点进行调整
-            MediaDecode decode = new MediaDecode();
+            MediaCodecInfo decode = new MediaCodecInfo();
             decode.path = videoInfo.path;
             decode.extractor = temp;
-            decode.cutPoint = videoInfo.cutPoint + videoDuration;
-            decode.cutDuration = videoInfo.cutDuration;
             decode.duration = videoInfo.duration;
-            videoDuration += videoInfo.duration;
             mMediaCodecInfos.add(decode);
         }
 
-        mExtractor = mExtractors.get(0);//先拿到第一个分离器
+        MediaExtractor mExtractor = mExtractors.get(0);
         int trackCount = mExtractor.getTrackCount();
         for (int i = 0; i < trackCount; i++) {//根据第一个视频信息来确定编码信息
             MediaFormat trackFormat = mExtractor.getTrackFormat(i);

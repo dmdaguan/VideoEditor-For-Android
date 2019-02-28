@@ -2,18 +2,14 @@ package com.example.cj.videoeditor.mediacodec;
 
 import android.annotation.TargetApi;
 import android.media.MediaCodec;
-import android.media.MediaCodecInfo;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
 import android.os.Build;
-import android.text.TextUtils;
 import android.util.Log;
 
-
-import com.example.cj.videoeditor.Constants;
 import com.example.cj.videoeditor.bean.AudioSettingInfo;
-import com.example.cj.videoeditor.bean.MediaDecode;
+import com.example.cj.videoeditor.media.MediaCodecInfo;
 import com.example.cj.videoeditor.media.VideoInfo;
 
 import java.io.File;
@@ -35,20 +31,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class AudioRunnable extends Thread {
     final int TIMEOUT_USEC = 0;
     private AudioSettingInfo mSettingInfo;//混音设置
+
     private int audioTrackIndex = -1;
     private MediaFormat audioMediaFormat;
     private MediaMuxerRunnable mMediaMuxer;
-    private MediaDecode mAudioDecode;
+    private MediaCodecInfo mAudioDecode;
     private boolean mIsBgmLong;
 
     private List<VideoInfo> mVideoInfos;//多个音频的合并
     private List<Integer> mTrackIndex = new ArrayList<>();//用于记录不同分离器的audio信道的index
-    private List<MediaDecode> mAudioDecodes = new ArrayList<>();
+    private List<MediaCodecInfo> mAudioDecodes = new ArrayList<>();
 
 
-    public AudioRunnable(List<VideoInfo> inputFiles, AudioSettingInfo settingInfo, MediaMuxerRunnable mediaMuxer) {
+    public AudioRunnable(List<VideoInfo> inputFiles, MediaMuxerRunnable mediaMuxer) {
         this.mMediaMuxer = mediaMuxer;
-        mSettingInfo = settingInfo;
         mVideoInfos = inputFiles;
     }
 
@@ -56,12 +52,8 @@ public class AudioRunnable extends Thread {
     public void run() {
         try {
             prepare();
-            if (mSettingInfo != null && !TextUtils.isEmpty(mSettingInfo.filePath)) {
-                //说明有混音操作
-                mixAudioEditor();
-            } else {
-                simpleAudioMix();
-            }
+
+            simpleAudioMix();
 
         } catch (IOException e) {
             e.printStackTrace();
@@ -70,32 +62,21 @@ public class AudioRunnable extends Thread {
     }
 
     private void prepare() throws IOException {
-        if (mSettingInfo != null && !TextUtils.isEmpty(mSettingInfo.filePath)) {//判断是否bgm更长
-            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
-            long audioDuration = 0;
-            for (int i = 0; i < mVideoInfos.size(); i++) {
-                retriever.setDataSource(mVideoInfos.get(i).path);
-                String videoDuration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-                audioDuration += Long.parseLong(videoDuration);
-            }
 
-            retriever.setDataSource(mSettingInfo.filePath);
-            String bgmDuration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-            mIsBgmLong = audioDuration < Long.parseLong(bgmDuration);
-        }
         for (int i = 0; i < mVideoInfos.size(); i++) {
             //给每一个视频文件都创建一个MediaExtractor
             MediaExtractor temp = new MediaExtractor();
             VideoInfo videoInfo = mVideoInfos.get(i);
             temp.setDataSource(videoInfo.path);
 
-            MediaDecode decode = new MediaDecode();//音频解码info
+            MediaCodecInfo decode = new MediaCodecInfo();//音频解码info
             decode.extractor = temp;
             decode.path = videoInfo.path;
             decode.cutPoint = videoInfo.cutPoint;
             decode.cutDuration = videoInfo.cutDuration;
             decode.duration = videoInfo.duration;
             mAudioDecodes.add(decode);
+
         }
 
         for (int i = 0; i < mAudioDecodes.size(); i++) {//所有音频Extractor选择信道,并且记录信道
@@ -115,86 +96,6 @@ public class AudioRunnable extends Thread {
         }
     }
 
-    /**
-     * 音频—》PCM —》读取pcm文件，进行混音
-     * 如果是多个音频和一个bgm进行混合
-     * 1、将多个音频写入同一个pcm临时文件
-     * 2、从音频的pcm文件和bgm的pcm文件读取数据 进行混音
-     * <p>
-     * 有一些可以优化的点
-     * 1、根据bgm的长度来决定解码音频的长度
-     * 2、bgm没有到达的点 就不进行解码 而选择直接写入
-     */
-    private void mixAudioEditor() {
-        //bgm初始化
-        MediaExtractor extractor = new MediaExtractor();
-        int audioTrack = -1;
-        boolean hasAudio = false;
-        try {
-            extractor.setDataSource(mSettingInfo.filePath);
-            for (int i = 0; i < extractor.getTrackCount(); i++) {
-                MediaFormat trackFormat = extractor.getTrackFormat(i);
-                String mime = trackFormat.getString(MediaFormat.KEY_MIME);
-                if (mime.startsWith("audio/")) {
-                    audioTrack = i;
-                    hasAudio = true;
-                    break;
-                }
-            }
-            if (hasAudio) {
-                extractor.selectTrack(audioTrack);
-                //分别用两个线程去解码数据，然后解码出来的数据，用一个线程去编码数据，用两个list去保存解码后的数据，如果
-                String path1 = Constants.getPath("video/temp/", "audio.pcm");//视频音乐
-                String path2 = Constants.getPath("video/temp/", "bgm.pcm");//背景音
-                final boolean[] audioDecodeIsOver = {false};
-                final boolean[] bgmDecodeIsOver = {false};
-
-                //原始音频解码
-                new Thread(new AudioRunnable.AudioDecodeRunnable(mAudioDecodes, mTrackIndex, path1, false, new AudioRunnable.DecodeOverListener() {
-                    @Override
-                    public void decodeIsOver() {
-                        audioDecodeIsOver[0] = true;
-                    }
-                })).start();
-
-                //bgm解码
-                List<MediaDecode> bgmDecode = new ArrayList<>();
-                MediaDecode decode = new MediaDecode();
-                decode.extractor = extractor;
-                bgmDecode.add(decode);
-
-                List<Integer> bgmTrack = new ArrayList<>();
-                bgmTrack.add(audioTrack);
-
-                new Thread(new AudioRunnable.AudioDecodeRunnable(bgmDecode, bgmTrack, path2, true, new AudioRunnable.DecodeOverListener() {
-                    @Override
-                    public void decodeIsOver() {
-                        bgmDecodeIsOver[0] = true;
-                    }
-                })).start();
-
-                //开启一个编码线程，将解码后的数据进行混合编码之后，写入到MediaMuxer中
-                while (true) {
-                    Thread.sleep(50);
-                    if (audioDecodeIsOver[0] && bgmDecodeIsOver[0]) {
-                        break;
-                    }
-                }
-                new Thread(new AudioRunnable.AudioMixAndEncodeRunnable(new String[]{path1, path2}, new AudioRunnable.EncodeListener() {
-                    @Override
-                    public void encodeIsOver() {
-                        mMediaMuxer.audioIsOver();
-                    }
-                })).start();
-
-
-            } else {
-                Log.e("hero", " select audio file has no auido track");
-            }
-        } catch (IOException | InterruptedException e) {
-            e.printStackTrace();
-        }
-    }
 
     //执行解码音频的代码块
     private AtomicBoolean bgmDecodeOver = new AtomicBoolean(false);//bgm解码完成
@@ -282,7 +183,7 @@ public class AudioRunnable extends Thread {
                                             streamDoneArray[1] = true;//bgm也不再读取
                                             //并且跳出去，就不再读数据了
                                             mediaEncode.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                                            for(FileInputStream temp:audioFileStreams){
+                                            for (FileInputStream temp : audioFileStreams) {
                                                 temp.close();
                                             }
                                             break;
@@ -304,7 +205,7 @@ public class AudioRunnable extends Thread {
                                             streamDoneArray[1] = true;//bgm也不再读取
                                             //结束读取数据和写入数据
                                             mediaEncode.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                                            for(FileInputStream temp:audioFileStreams){
+                                            for (FileInputStream temp : audioFileStreams) {
                                                 temp.close();
                                             }
                                             break;
@@ -315,7 +216,7 @@ public class AudioRunnable extends Thread {
                             if (!streamDoneArray[0] || !streamDoneArray[1]) {
                                 //对两个byte数组进行合并
 //                                chunkPCM = AudioHardcodeHandler.normalizationMix(allAudioBytes, mSettingInfo.volFirst, mSettingInfo.volSecond);
-                                chunkPCM = AudioCodec.nativeAudioMix(allAudioBytes, mSettingInfo.volFirst, mSettingInfo.volSecond);
+                                chunkPCM = AudioCodec.nativeAudioMix(allAudioBytes, 1, 1);
                                 if (chunkPCM == null) {
                                     break;
                                 }
@@ -333,7 +234,7 @@ public class AudioRunnable extends Thread {
                         } else if (outputIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
                         } else if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                             MediaFormat newFormat = mediaEncode.getOutputFormat();
-                            mMediaMuxer.addMeidaFormat(MediaMuxerRunnable.MEDIA_TRACK_AUDIO, newFormat);
+                            mMediaMuxer.addMediaFormat(MediaMuxerRunnable.MEDIA_TRACK_AUDIO, newFormat);
                         } else if (outputIndex < 0) {
                         } else {
                             if ((encodeBufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
@@ -397,13 +298,13 @@ public class AudioRunnable extends Thread {
         private boolean isBgm;
         private String tempPcmFile;
         private AudioRunnable.DecodeOverListener mListener;
-        private List<MediaDecode> mMediaCodecInfos;//将多个分离器中的音频数据 写入一个pcm文件中
+        private List<MediaCodecInfo> mMediaCodecInfos;//将多个分离器中的音频数据 写入一个pcm文件中
         private List<MediaCodec> mAudioCodec;
         private List<Integer> audioTrackList;//各个分离器中track的index
         private MediaCodec mMediaCodec;
-        private MediaDecode mMediaCodecInfo;
+        private MediaCodecInfo mMediaCodecInfo;
 
-        public AudioDecodeRunnable(List<MediaDecode> extractors, List<Integer> trackList, String pcmFile, boolean isBgm, AudioRunnable.DecodeOverListener listener) {
+        public AudioDecodeRunnable(List<MediaCodecInfo> extractors, List<Integer> trackList, String pcmFile, boolean isBgm, AudioRunnable.DecodeOverListener listener) {
             mMediaCodecInfos = extractors;
             audioTrackList = trackList;
             this.isBgm = isBgm;
@@ -446,7 +347,7 @@ public class AudioRunnable extends Thread {
             }
 
 
-            /**
+            /*
              * 2、选中第一个解码器
              * */
             mMediaCodec = mAudioCodec.get(0);
@@ -455,7 +356,7 @@ public class AudioRunnable extends Thread {
             if (mAudioDecodes.get(0).cutDuration > 0 && mAudioDecodes.get(0).cutPoint + mAudioDecodes.get(0).cutDuration <= mAudioDecodes.get(0).duration) {
                 mMediaCodecInfo.extractor.seekTo(mAudioDecodes.get(0).cutPoint * 1000, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
             }
-            /**
+            /*
              * 3、初始化当前解码器的相关参数
              * */
             ByteBuffer[] inputBuffers = mMediaCodec.getInputBuffers();
@@ -478,7 +379,7 @@ public class AudioRunnable extends Thread {
                             //遍历所以的编码器 然后将数据传入之后 再去输出端取数据
                             int inputIndex = mMediaCodec.dequeueInputBuffer(TIMEOUT_USEC);
                             if (inputIndex >= 0) {
-                                /**
+                                /*
                                  * 从分离器中拿到数据 写入解码器
                                  * */
                                 ByteBuffer inputBuffer = inputBuffers[inputIndex];//拿到inputBuffer
@@ -489,7 +390,7 @@ public class AudioRunnable extends Thread {
                                     mMediaCodec.queueInputBuffer(inputIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                                     inputDone = true;
                                 } else {
-                                    /**音频对解码前的数据 进行抛弃*/
+                                    /*音频对解码前的数据 进行抛弃*/
                                     long sampleTime = mMediaCodecInfo.extractor.getSampleTime();
                                     boolean isWrite = true;
                                     if (mMediaCodecInfo.cutDuration > 0 && sampleTime / 1000 < mMediaCodecInfo.cutPoint) {
@@ -678,7 +579,7 @@ public class AudioRunnable extends Thread {
             }
         }
         //将第一个视频的audioFormat作为整体音频的audioFormat
-        mMediaMuxer.addMeidaFormat(MediaMuxerRunnable.MEDIA_TRACK_AUDIO, audioMediaFormat);
+        mMediaMuxer.addMediaFormat(MediaMuxerRunnable.MEDIA_TRACK_AUDIO, audioMediaFormat);
 
         ByteBuffer buffer = ByteBuffer.allocate(50 * 1024);
 
@@ -696,7 +597,7 @@ public class AudioRunnable extends Thread {
                 isFirstSeek = true;
             }
             while (true) {
-                int readSampleData = mAudioDecode.extractor.readSampleData(buffer, 0);
+                int readSampleData = mExtractor.readSampleData(buffer, 0);
                 if (readSampleData < 0) {
                     //说明 本地读取完毕了
                     curIndex++;

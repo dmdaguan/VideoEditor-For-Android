@@ -1,8 +1,10 @@
 package com.example.cj.videoeditor.activity;
 
+import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.app.LoaderManager;
+import android.content.Context;
 import android.content.CursorLoader;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -32,10 +34,26 @@ import java.io.IOException;
  */
 
 public class VideoSelectActivity extends BaseActivity implements LoaderManager.LoaderCallbacks<Cursor>,VideoAdapter.OnVideoSelectListener {
+    public static final int TYPE_SHOW_DIALOG = 1;
+    public static final int TYPE_BACK_PATH = 2;
+
     ImageView ivClose;
     GridView gridview;
     public static final String PROJECT_VIDEO = MediaStore.MediaColumns._ID;
     private VideoAdapter mVideoAdapter;
+    private int pageType = TYPE_SHOW_DIALOG;
+
+    public static void openActivity(Context context){
+        Intent intent = new Intent(context,VideoSelectActivity.class);
+        intent.putExtra("type",TYPE_SHOW_DIALOG);
+        context.startActivity(intent);
+    }
+
+    public static void openActivityForResult(Activity context,int requestCodde){
+        Intent intent = new Intent(context,VideoSelectActivity.class);
+        intent.putExtra("type",TYPE_BACK_PATH);
+        context.startActivityForResult(intent,requestCodde);
+    }
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -55,6 +73,9 @@ public class VideoSelectActivity extends BaseActivity implements LoaderManager.L
         gridview=(GridView)findViewById(R.id.gridview_media_video);
     }
     private void initData() {
+        pageType = getIntent().getIntExtra("type", TYPE_SHOW_DIALOG);
+
+
         getLoaderManager().initLoader(0,null,this);
     }
 
@@ -111,7 +132,7 @@ public class VideoSelectActivity extends BaseActivity implements LoaderManager.L
                 if (format.getString(MediaFormat.KEY_MIME).startsWith("video/")) {
                     videoTrack=i;
                     String videoMime = format.getString(MediaFormat.KEY_MIME);
-                    if(!"video/avc".equals(videoMime)){
+                    if(!MediaFormat.MIMETYPE_VIDEO_AVC.equals(videoMime) ){
                         Toast.makeText(this,"视频格式不支持",Toast.LENGTH_SHORT).show();
                         return;
                     }
@@ -120,7 +141,7 @@ public class VideoSelectActivity extends BaseActivity implements LoaderManager.L
                 if (format.getString(MediaFormat.KEY_MIME).startsWith("audio/")) {
                     audioTrack=i;
                     String audioMime = format.getString(MediaFormat.KEY_MIME);
-                    if(!"audio/mp4a-latm".equals(audioMime)){
+                    if(!MediaFormat.MIMETYPE_AUDIO_AAC.equals(audioMime)){
                         Toast.makeText(this,"视频格式不支持",Toast.LENGTH_SHORT).show();
                         return;
                     }
@@ -136,6 +157,13 @@ public class VideoSelectActivity extends BaseActivity implements LoaderManager.L
         }
         if(videoTrack==-1||audioTrack==-1){
             Toast.makeText(this,"视频格式不支持",Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (pageType == TYPE_BACK_PATH){
+            Intent intent = getIntent();
+            intent.putExtra("path",path);
+            setResult(0,intent);
+            finish();
             return;
         }
         AlertDialog.Builder mDialog = new AlertDialog.Builder(this);
